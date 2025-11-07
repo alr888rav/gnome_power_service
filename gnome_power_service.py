@@ -7,11 +7,15 @@ import logging
 import os
 import psutil
 import subprocess
+import re
+import time
+import glob
 
 # if needed
 # sudo apt install python3-pydbus
 # sudo apt install libdbus-1-dev libdbus-glib-1-dev
 
+ver = '0.2'
 # Setup logging
 log_file = os.path.expanduser('~/gnome-power-service.log')
 logging.basicConfig(
@@ -25,6 +29,7 @@ logging.basicConfig(
 
 CONFIG_DIR = os.path.expanduser("~/.config/gnome_power_service")
 CONFIG_FILE = os.path.join(CONFIG_DIR, "config.json")
+CACHE_FILE = os.path.expanduser("~/.cache/brightness_check.json")
 
 def load_config():
     default_config = {
@@ -204,7 +209,107 @@ def reload_service():
     subprocess.run(['systemctl', '--user', 'restart', 'gnome-power-service.timer'], check=True)
     logging.info("Service reloaded.")
 
+def get_screen_status():
+    """
+    Query GNOME Mutter DisplayConfig.PowerSaveMode via gdbus.
+    Returns one of: 'on', 'dimmed', 'blanked', 'off', or 'unknown'.
+    """
+    try:
+        result = subprocess.run([
+            "gdbus", "call", "--session",
+            "--dest", "org.gnome.Mutter.DisplayConfig",
+            "--object-path", "/org/gnome/Mutter/DisplayConfig",
+            "--method", "org.freedesktop.DBus.Properties.Get",
+            "org.gnome.Mutter.DisplayConfig", "PowerSaveMode"
+        ], capture_output=True, text=True, check=True)
+
+        stdout = result.stdout.strip()  # e.g. '(<0>,)'
+        # primary pattern: matches '(<0>,)', '(<0>, )', '(< 0 >,)' etc.
+        m = re.search(r'<\s*(\d+)\s*>', stdout)
+
+        if not m:
+            return "unknown"
+
+        mode = int(m.group(1))
+        return {0: "on", 1: "dimmed", 2: "blanked", 3: "off"}.get(mode, "unknown")
+
+    except subprocess.CalledProcessError:
+        return "unknown"
+
+def get_actual_brightness():
+    """Return current actual backlight brightness value"""
+    paths = glob.glob("/sys/class/backlight/*/actual_brightness")
+    if not paths:
+        return None
+    try:
+        with open(paths[0]) as f:
+            return int(f.read().strip())
+    except Exception:
+        return None
+
+
+def get_gnome_idle_time():
+    """Return GNOME idle time in seconds (Wayland-safe)."""
+    try:
+        result = subprocess.run(
+            [
+                "gdbus", "call", "--session",
+                "--dest", "org.gnome.Mutter.IdleMonitor",
+                "--object-path", "/org/gnome/Mutter/IdleMonitor/Core",
+                "--method", "org.gnome.Mutter.IdleMonitor.GetIdletime"
+            ],
+            capture_output=True, text=True, timeout=2
+        )
+        m = re.search(r"\(uint64 (\d+),\)", result.stdout)
+        if m:
+            return int(m.group(1)) / 1000.0  # ms → s
+    except Exception:
+        pass
+    return 0.0
+
+
+def get_last_cached_value():
+    """Load cached brightness and timestamp if exists."""
+    if not os.path.exists(CACHE_FILE):
+        return None
+    try:
+        with open(CACHE_FILE, "r") as f:
+            return json.load(f)
+    except Exception:
+        return None
+
+
+def save_current_state(brightness):
+    """Save current brightness and timestamp."""
+    data = {"brightness": brightness, "timestamp": time.time()}
+    os.makedirs(os.path.dirname(CACHE_FILE), exist_ok=True)
+    with open(CACHE_FILE, "w") as f:
+        json.dump(data, f)
+
+
+def detect_auto_dim():
+    """Return True if screen appears dimmed automatically."""
+    current_brightness = get_actual_brightness()
+    prev = get_last_cached_value()
+    idle_time = get_gnome_idle_time()
+
+    # Save current brightness for next comparison
+    save_current_state(current_brightness)
+
+    # First run, nothing to compare
+    if not prev:
+        return False
+
+    prev_brightness = prev["brightness"]
+
+    # Detect dimming when system idle and brightness lowered
+    if idle_time > 1 and current_brightness < prev_brightness:
+        return True
+
+    return False
+
 if __name__ == "__main__":
+
     config = load_config()
 
     parser = argparse.ArgumentParser(description='GNOME Power Service')
@@ -213,6 +318,7 @@ if __name__ == "__main__":
     parser.add_argument('--status', action='store_true', help='Check service status')
     parser.add_argument('--config', action='store_true', help='Edit configuration file')
     parser.add_argument('--reload', action='store_true', help='Reload the service')
+    parser.add_argument('--version', action='store_true', help='Show version')
 
     args = parser.parse_args()
 
@@ -226,33 +332,50 @@ if __name__ == "__main__":
         config_service()
     elif args.reload:
         reload_service()
+    elif args.version:
+        print('Version: {ver}')
     else:
         # Default behavior: run the power management logic
         if has_brightness_control():
             power_status = get_power_status()
             logging.info(f"Power mode: {power_status}")
+            screen = get_screen_status()
+            logging.info(f'Screen: {screen}')
+            dimmed = detect_auto_dim()
+            logging.info(f'Dimmed: {dimmed}')
             if power_status == 'Battery':
                 logging.info('Power-saver mode')
                 set_power_profile('power-saver')
-                kb_brightness = config['keyboard_brightness'][0]
-                logging.info(f'Keyboard brightness: {kb_brightness}')
-                set_keyboard_brightness(kb_brightness)
-                if config['dim_screen']:
-                    logging.info("Enabling dimming")
-                    set_dimming(True)
-                if config['change_theme']:
-                    set_theme(config['dark_theme'])
+                if screen == 'on' and not dimmed:
+                    kb_brightness = config['keyboard_brightness'][0]
+                    logging.info(f'Keyboard brightness: {kb_brightness}')
+                    set_keyboard_brightness(kb_brightness)
+                    if config['dim_screen']:
+                        logging.info("Enabling dimming")
+                        set_dimming(True)
+                    if config['change_theme']:
+                        set_theme(config['dark_theme'])
+                elif screen == 'off':
+                    kb_brightness = 0
+                    logging.info(f'Keyboard brightness: {kb_brightness}')
+                    set_keyboard_brightness(kb_brightness)
             elif power_status == 'AC':
                 logging.info('Balanced mode')
                 set_power_profile('balanced')
-                kb_brightness = config['keyboard_brightness'][1]
-                logging.info(f'Keyboard brightness: {kb_brightness}')
-                set_keyboard_brightness(kb_brightness)
-                if config['dim_screen']:
-                    logging.info("Disable dimming")
-                    set_dimming(False)
-                if config['change_theme']:
-                    set_theme(config['light_theme'])
+                if screen == 'on' and not dimmed:
+                    kb_brightness = config['keyboard_brightness'][1]
+                    logging.info(f'Keyboard brightness: {kb_brightness}')
+                    set_keyboard_brightness(kb_brightness)
+                    if config['dim_screen']:
+                        logging.info("Disable dimming")
+                        set_dimming(False)
+                    if config['change_theme']:
+                        set_theme(config['light_theme'])
+                elif screen == 'off':
+                    kb_brightness = 0
+                    logging.info(f'Keyboard brightness: {kb_brightness}')
+                    set_keyboard_brightness(kb_brightness)
+
             else:
                 logging.info("Unknown power status")
         else:
