@@ -32,6 +32,10 @@ A Python service that automatically adjusts GNOME power settings based on whethe
    ```bash
    sudo apt install python3-pydbus libdbus-1-dev libdbus-glib-1-dev
    ```
+   #### 2.1 For brightness control
+   ```bash
+   sudo apt install brightnessctl
+   ```
 
 3. Install the service:
    ```bash
@@ -39,9 +43,8 @@ A Python service that automatically adjusts GNOME power settings based on whethe
    ```
 
 This will:
-- Copy the script to `~/.local/bin/`
 - Create systemd user service and timer files
-- Enable and start the timer (runs every 60 seconds)
+- Enable and start the timer (runs every 30 seconds)
 
 ## Usage
 

@@ -1,21 +1,21 @@
 #!/usr/bin/env python3
 
 import argparse
-from datetime import datetime
+import glob
 import json
 import logging
 import os
-import psutil
-import subprocess
 import re
+import subprocess
 import time
-import glob
+from datetime import datetime
+import psutil
 
 # if needed
 # sudo apt install python3-pydbus
 # sudo apt install libdbus-1-dev libdbus-glib-1-dev
 
-ver = '0.2'
+ver = '0.3'
 # Setup logging
 log_file = os.path.expanduser('~/gnome-power-service.log')
 logging.basicConfig(
@@ -33,11 +33,15 @@ CACHE_FILE = os.path.expanduser("~/.cache/brightness_check.json")
 
 def load_config():
     default_config = {
-        "dim_screen": True,
+        "dim_screen": False,
         "change_theme": False,
         "light_theme": "Yaru",
         "dark_theme": "Yaru-dark",
-        "keyboard_brightness": [25, 65]
+        "keyboard_control": True,
+        "keyboard_brightness": [25, 65],
+        "brightness_control": True,
+        "brightness": [25, 55],
+        "power_control": True
     }
     if not os.path.exists(CONFIG_FILE):
         os.makedirs(CONFIG_DIR, exist_ok=True)
@@ -127,20 +131,6 @@ def set_theme(theme_name: str):
 
 def install_service():
     script_path = os.path.abspath(__file__)
-    home_dir = os.path.expanduser("~")
-    bin_dir = os.path.join(home_dir, ".local", "bin")
-
-    # Check if script is not in ~/.local/bin, copy it there
-    if not script_path.startswith(bin_dir):
-        os.makedirs(bin_dir, exist_ok=True)
-        new_script_path = os.path.join(bin_dir, "gnome_power_service.py")
-
-        # Copy the script to ~/.local/bin
-        import shutil
-        shutil.copy2(script_path, new_script_path)
-        os.chmod(new_script_path, 0o755)  # Make executable
-        script_path = new_script_path
-        logging.info(f"Script copied to {script_path}")
 
     service_content = f"""[Unit]
 Description=GNOME Power Service
@@ -156,7 +146,7 @@ Requires=gnome-power-service.service
 
 [Timer]
 OnActiveSec=0
-OnUnitActiveSec=60
+OnUnitActiveSec=30
 AccuracySec=1s
 
 [Install]
@@ -268,7 +258,7 @@ def get_gnome_idle_time():
     return 0.0
 
 
-def get_last_cached_value():
+def get_cache():
     """Load cached brightness and timestamp if exists."""
     if not os.path.exists(CACHE_FILE):
         return None
@@ -279,7 +269,7 @@ def get_last_cached_value():
         return None
 
 
-def save_current_state(brightness):
+def set_cache(brightness):
     """Save current brightness and timestamp."""
     data = {"brightness": brightness, "timestamp": time.time()}
     os.makedirs(os.path.dirname(CACHE_FILE), exist_ok=True)
@@ -290,11 +280,11 @@ def save_current_state(brightness):
 def detect_auto_dim():
     """Return True if screen appears dimmed automatically."""
     current_brightness = get_actual_brightness()
-    prev = get_last_cached_value()
+    prev = get_cache()
     idle_time = get_gnome_idle_time()
 
     # Save current brightness for next comparison
-    save_current_state(current_brightness)
+    set_cache(current_brightness)
 
     # First run, nothing to compare
     if not prev:
@@ -307,6 +297,12 @@ def detect_auto_dim():
         return True
 
     return False
+
+def set_brightness_sudo(brightness):
+    # Set brightness using sudo privileges.
+    cmd = f'cat ~/.sudo_pass | sudo -S brightnessctl set {brightness}%'
+    # Using ``shell=True`` allows the pipe to work as in the original script.
+    subprocess.run(cmd, shell=True, check=True)
 
 if __name__ == "__main__":
 
@@ -337,6 +333,11 @@ if __name__ == "__main__":
     else:
         # Default behavior: run the power management logic
         if has_brightness_control():
+            # Save current brightness for next comparison
+            current_brightness = get_actual_brightness()
+            set_cache(current_brightness)
+
+            sc_brightness = config['screen_brightness']
             power_status = get_power_status()
             logging.info(f"Power mode: {power_status}")
             screen = get_screen_status()
@@ -344,33 +345,43 @@ if __name__ == "__main__":
             dimmed = detect_auto_dim()
             logging.info(f'Dimmed: {dimmed}')
             if power_status == 'Battery':
-                logging.info('Power-saver mode')
-                set_power_profile('power-saver')
+                if config['power_control']:
+                    logging.info('Power-saver mode')
+                    set_power_profile('power-saver')
                 if screen == 'on' and not dimmed:
-                    kb_brightness = config['keyboard_brightness'][0]
-                    logging.info(f'Keyboard brightness: {kb_brightness}')
-                    set_keyboard_brightness(kb_brightness)
+                    if config['keyboard_control']:
+                        kb_brightness = config['keyboard_brightness'][0]
+                        logging.info(f'Keyboard brightness: {kb_brightness}')
+                        set_keyboard_brightness(kb_brightness)
                     if config['dim_screen']:
                         logging.info("Enabling dimming")
                         set_dimming(True)
                     if config['change_theme']:
                         set_theme(config['dark_theme'])
+                    if config['brightness_control']:
+                        logging.info(f'Brightness: {sc_brightness[0]}')
+                        set_brightness_sudo(sc_brightness[0])
                 elif screen == 'off':
                     kb_brightness = 0
                     logging.info(f'Keyboard brightness: {kb_brightness}')
                     set_keyboard_brightness(kb_brightness)
             elif power_status == 'AC':
-                logging.info('Balanced mode')
-                set_power_profile('balanced')
+                if config['power_control']:
+                    logging.info('Balanced mode')
+                    set_power_profile('balanced')
                 if screen == 'on' and not dimmed:
-                    kb_brightness = config['keyboard_brightness'][1]
-                    logging.info(f'Keyboard brightness: {kb_brightness}')
-                    set_keyboard_brightness(kb_brightness)
+                    if config['keyboard_control']:
+                        kb_brightness = config['keyboard_brightness'][1]
+                        logging.info(f'Keyboard brightness: {kb_brightness}')
+                        set_keyboard_brightness(kb_brightness)
                     if config['dim_screen']:
                         logging.info("Disable dimming")
                         set_dimming(False)
                     if config['change_theme']:
                         set_theme(config['light_theme'])
+                    if config['brightness_control']:
+                        logging.info(f'Brightness: {sc_brightness[1]}')
+                        set_brightness_sudo(sc_brightness[1])
                 elif screen == 'off':
                     kb_brightness = 0
                     logging.info(f'Keyboard brightness: {kb_brightness}')
