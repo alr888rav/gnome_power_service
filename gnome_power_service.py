@@ -4,6 +4,7 @@ import argparse
 import glob
 import json
 import logging
+from logging.handlers import RotatingFileHandler  # Added for size‑limited logging
 import os
 import re
 import subprocess
@@ -15,14 +16,14 @@ import psutil
 # sudo apt install python3-pydbus
 # sudo apt install libdbus-1-dev libdbus-glib-1-dev
 
-ver = '0.3'
+ver = '0.31'
 # Setup logging
 log_file = os.path.expanduser('~/gnome-power-service.log')
 logging.basicConfig(
     level=logging.INFO,
     format='%(asctime)s - %(levelname)s - %(message)s',
     handlers=[
-        logging.FileHandler(log_file),
+        RotatingFileHandler(log_file, maxBytes=100 * 1024, backupCount=3),  # 100 KB limit
         logging.StreamHandler()
     ]
 )
