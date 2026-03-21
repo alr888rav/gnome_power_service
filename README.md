@@ -35,9 +35,24 @@ A Python service that automatically adjusts GNOME power settings based on whethe
    #### 2.1 For brightness control
    ```bash
    sudo apt install brightnessctl
+   sudo apt install libdbus-1-dev libdbus-glib-1-dev
+   sudo apt install libgirepository-2.0-dev
    ```
 
-3. Install the service:
+3. Create virtual environment:
+   ```bash
+   python3 -m venv venv
+   ```
+
+4. Activate virtual environment:
+   ```bash
+   source venv/bin/activate
+   ```
+   ```bash
+   pip install -r requirements.txt
+   ```
+
+5. Install the service:
    ```bash
    python3 gnome_power_service.py --install
    ```
@@ -46,13 +61,6 @@ This will:
 - Create systemd user service and timer files
 - Enable and start the timer (runs every 30 seconds)
 
-## Usage
-
-The service runs automatically in the background. You can also run it manually:
-
-```bash
-python3 gnome_power_service.py
-```
 
 ### Command Line Options
 
@@ -73,6 +81,7 @@ Edit the configuration file at `~/.config/gnome_power_service/config.json`:
     "light_theme": "Yaru",
     "dark_theme": "Yaru-dark",
     "keyboard_brightness": [25, 65]
+    ....
 }
 ```
 
@@ -84,7 +93,7 @@ Edit the configuration file at `~/.config/gnome_power_service/config.json`:
 
 ## Uninstallation
 
-To remove the service:
+To remove the service (in venv):
 
 ```bash
 python3 gnome_power_service.py --uninstall

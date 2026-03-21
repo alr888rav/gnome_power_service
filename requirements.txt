@@ -1,0 +1,4 @@
+psutil
+keyring
+pydbus
+PyGObject

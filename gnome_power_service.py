@@ -11,12 +11,11 @@ import subprocess
 import time
 from datetime import datetime
 import psutil
+import keyring
 
-# if needed
-# sudo apt install python3-pydbus
-# sudo apt install libdbus-1-dev libdbus-glib-1-dev
+# use python3 -m venv venv before run
 
-ver = '0.31'
+ver = '0.4'
 # Setup logging
 log_file = os.path.expanduser('~/gnome-power-service.log')
 logging.basicConfig(
@@ -31,6 +30,31 @@ logging.basicConfig(
 CONFIG_DIR = os.path.expanduser("~/.config/gnome_power_service")
 CONFIG_FILE = os.path.join(CONFIG_DIR, "config.json")
 CACHE_FILE = os.path.expanduser("~/.cache/brightness_check.json")
+SERVICE_NAME = "gnome_power_service"
+USER_NAME = os.getlogin()
+
+def get_password():
+    # 1. Try Keyring
+    pwd = keyring.get_password(SERVICE_NAME, USER_NAME)
+    if pwd:
+        return pwd
+
+    # 2. Keyring empty? Trigger a GUI popup
+    # Zenity creates a standard GNOME password entry dialog
+    try:
+        proc = subprocess.run(
+            ["zenity", "--password", "--title=Authorization Required", "--text=Enter sudo password:"],
+            capture_output=True, text=True, check=True
+        )
+        pwd = proc.stdout.strip()
+        
+        if pwd:
+            keyring.set_password(SERVICE_NAME, USER_NAME, pwd)
+            return pwd
+    except subprocess.CalledProcessError:
+        print("User cancelled the password prompt.")
+        sys.exit(1)
+
 
 def load_config():
     default_config = {
@@ -42,7 +66,8 @@ def load_config():
         "keyboard_brightness": [25, 65],
         "brightness_control": True,
         "brightness": [25, 55],
-        "power_control": True
+        "power_control": True,
+        "cpu_turbo_control": True
     }
     if not os.path.exists(CONFIG_FILE):
         os.makedirs(CONFIG_DIR, exist_ok=True)
@@ -132,14 +157,19 @@ def set_theme(theme_name: str):
 
 def install_service():
     script_path = os.path.abspath(__file__)
+    venv_python = os.path.join(os.path.dirname(script_path), 'venv', 'bin', 'python3')
 
     service_content = f"""[Unit]
 Description=GNOME Power Service
 After=graphical-session.target
 
 [Service]
+# This links the service to your GUI session so Zenity can pop up
+Environment=DISPLAY=:0
+Environment=DBUS_SESSION_BUS_ADDRESS=unix:path=/run/user/%U/bus
+
 Type=oneshot
-ExecStart=/usr/bin/python3 {script_path}
+ExecStart={venv_python} {script_path}
 """
     timer_content = """[Unit]
 Description=GNOME Power Service Timer
@@ -301,9 +331,21 @@ def detect_auto_dim():
 
 def set_brightness_sudo(brightness):
     # Set brightness using sudo privileges.
-    cmd = f'cat ~/.sudo_pass | sudo -S brightnessctl set {brightness}%'
-    # Using ``shell=True`` allows the pipe to work as in the original script.
-    subprocess.run(cmd, shell=True, check=True)
+    pwd = get_password()
+    cmd = f"sudo -S -p '' brightnessctl set {brightness}%"
+    subprocess.run(cmd, shell=True, input=pwd + "\n", text=True, check=True)
+
+def set_turbo_sudo(enable=True):
+    value = "1" if enable else "0"
+    pwd = get_password()
+    
+    cmd = f"sudo -S -p '' sh -c 'echo {value} > /sys/devices/system/cpu/cpufreq/boost'"
+
+    try:
+        subprocess.run(cmd, shell=True, input=pwd + "\n", text=True, check=True)
+        return True
+    except subprocess.CalledProcessError:
+        return False
 
 if __name__ == "__main__":
 
@@ -337,8 +379,8 @@ if __name__ == "__main__":
             # Save current brightness for next comparison
             current_brightness = get_actual_brightness()
             set_cache(current_brightness)
-
             sc_brightness = config['screen_brightness']
+            kb_brightness = config['keyboard_brightness']
             power_status = get_power_status()
             logging.info(f"Power mode: {power_status}")
             screen = get_screen_status()
@@ -349,44 +391,52 @@ if __name__ == "__main__":
                 if config['power_control']:
                     logging.info('Power-saver mode')
                     set_power_profile('power-saver')
+                    if config['cpu_turbo_control']:
+                        set_turbo_sudo(False)
+                        logging.info('Turbo OFF')
                 if screen == 'on' and not dimmed:
                     if config['keyboard_control']:
-                        kb_brightness = config['keyboard_brightness'][0]
-                        logging.info(f'Keyboard brightness: {kb_brightness}')
-                        set_keyboard_brightness(kb_brightness)
+                        new_kb_brightness = kb_brightness[0]
+                        logging.info(f'Keyboard brightness: {new_kb_brightness}')
+                        set_keyboard_brightness(new_kb_brightness)
                     if config['dim_screen']:
                         logging.info("Enabling dimming")
                         set_dimming(True)
                     if config['change_theme']:
                         set_theme(config['dark_theme'])
                     if config['brightness_control']:
-                        logging.info(f'Brightness: {sc_brightness[0]}')
-                        set_brightness_sudo(sc_brightness[0])
+                        new_brightness = sc_brightness[0]
+                        logging.info(f'Brightness: {new_brightness}')
+                        set_brightness_sudo(new_brightness)
                 elif screen == 'off':
-                    kb_brightness = 0
-                    logging.info(f'Keyboard brightness: {kb_brightness}')
-                    set_keyboard_brightness(kb_brightness)
+                    new_kb_brightness = 0
+                    logging.info(f'Keyboard brightness: {new_kb_brightness}')
+                    set_keyboard_brightness(new_kb_brightness)
             elif power_status == 'AC':
                 if config['power_control']:
                     logging.info('Balanced mode')
                     set_power_profile('balanced')
+                    if config['cpu_turbo_control']:
+                        set_turbo_sudo(True)
+                        logging.info(f'Turbo ON')
                 if screen == 'on' and not dimmed:
                     if config['keyboard_control']:
-                        kb_brightness = config['keyboard_brightness'][1]
-                        logging.info(f'Keyboard brightness: {kb_brightness}')
-                        set_keyboard_brightness(kb_brightness)
+                        new_kb_brightness = kb_brightness[1]
+                        logging.info(f'Keyboard brightness: {new_kb_brightness}')
+                        set_keyboard_brightness(new_kb_brightness)
                     if config['dim_screen']:
                         logging.info("Disable dimming")
                         set_dimming(False)
                     if config['change_theme']:
                         set_theme(config['light_theme'])
                     if config['brightness_control']:
-                        logging.info(f'Brightness: {sc_brightness[1]}')
-                        set_brightness_sudo(sc_brightness[1])
+                        new_brightness = sc_brightness[1]
+                        logging.info(f'Brightness: {new_brightness}')
+                        set_brightness_sudo(new_brightness)
                 elif screen == 'off':
-                    kb_brightness = 0
-                    logging.info(f'Keyboard brightness: {kb_brightness}')
-                    set_keyboard_brightness(kb_brightness)
+                    new_kb_brightness = 0
+                    logging.info(f'Keyboard brightness: {new_kb_brightness}')
+                    set_keyboard_brightness(new_kb_brightness)
 
             else:
                 logging.info("Unknown power status")
