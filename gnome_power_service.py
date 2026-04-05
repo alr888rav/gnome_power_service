@@ -65,7 +65,7 @@ def load_config():
         "keyboard_control": True,
         "keyboard_brightness": [25, 65],
         "brightness_control": True,
-        "brightness": [25, 55],
+        "screen_brightness": [25, 55],
         "power_control": True,
         "cpu_turbo_control": True
     }
@@ -414,11 +414,11 @@ if __name__ == "__main__":
                     set_keyboard_brightness(new_kb_brightness)
             elif power_status == 'AC':
                 if config['power_control']:
-                    logging.info('Balanced mode')
-                    set_power_profile('balanced')
                     if config['cpu_turbo_control']:
                         set_turbo_sudo(True)
                         logging.info(f'Turbo ON')
+                    logging.info('Balanced mode')
+                    set_power_profile('balanced')
                 if screen == 'on' and not dimmed:
                     if config['keyboard_control']:
                         new_kb_brightness = kb_brightness[1]
