@@ -23,28 +23,23 @@ A Python service that automatically adjusts GNOME power settings based on whethe
 
 ## Installation
 
-1. Install Python dependencies:
-   ```bash
-   pip install psutil pydbus
-   ```
-
-2. Install system dependencies (Ubuntu/Debian):
+1. Install system dependencies (Ubuntu/Debian):
    ```bash
    sudo apt install python3-pydbus libdbus-1-dev libdbus-glib-1-dev
    ```
-   #### 2.1 For brightness control
+   #### 1.1 For brightness control
    ```bash
    sudo apt install brightnessctl
    sudo apt install libdbus-1-dev libdbus-glib-1-dev
    sudo apt install libgirepository-2.0-dev
    ```
 
-3. Create virtual environment:
+2. Create virtual environment:
    ```bash
    python3 -m venv venv
    ```
 
-4. Activate virtual environment:
+3. Activate virtual environment:
    ```bash
    source venv/bin/activate
    ```
@@ -52,7 +47,7 @@ A Python service that automatically adjusts GNOME power settings based on whethe
    pip install -r requirements.txt
    ```
 
-5. Install the service:
+4. Install the service:
    ```bash
    python3 gnome_power_service.py --install
    ```
