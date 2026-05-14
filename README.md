@@ -26,11 +26,12 @@ A Python service that automatically adjusts GNOME power settings based on whethe
 1. Install system dependencies (Ubuntu/Debian):
    ```bash
    sudo apt install python3-pydbus libdbus-1-dev libdbus-glib-1-dev
+   sudo apt install libgirepository1.0-dev gcc libcairo2-dev pkg-config python3-dev gist
+
    ```
    #### 1.1 For brightness control
    ```bash
    sudo apt install brightnessctl
-   sudo apt install libdbus-1-dev libdbus-glib-1-dev
    sudo apt install libgirepository-2.0-dev
    ```
 
