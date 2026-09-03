@@ -1,0 +1,10 @@
+[Desktop Entry]
+Name=Power Service Settings
+Comment=Configure GNOME Power Service (power profiles, brightness, theme)
+Exec=/home/rl/my/venv/bin/python /home/rl/my/gnome-power-settings/app.py
+Icon=power-profile-balanced
+Terminal=false
+Type=Application
+Categories=Settings;System;
+Keywords=power;brightness;battery;theme;
+StartupNotify=true
